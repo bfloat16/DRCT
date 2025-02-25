@@ -1,5 +1,5 @@
 # general settings
-name: train_Real_DRCT_mse_model+sobel_loss
+name: DRCT_x4_mse+sobel_loss
 model_type: RealDRCTMSEModel
 scale: 4
 num_gpu: auto
@@ -75,7 +75,7 @@ datasets:
     dataroot_gt: ./datasets/Val/gt
     dataroot_lq: ./datasets/Val/lq
     io_backend:
-      type: disk
+      type: disk  
 
 # network structures
 network_g:
@@ -84,7 +84,6 @@ network_g:
   in_chans: 3
   img_size: 64
   window_size: 16
-  overlap_ratio: 0.5
   img_range: 1.
   depths: [6, 6, 6, 6, 6, 6]
   embed_dim: 180

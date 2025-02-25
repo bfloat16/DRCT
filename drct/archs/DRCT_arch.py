@@ -211,7 +211,7 @@ class RDG(nn.Module):
         self.adjust5 = nn.Conv2d(dim+gc*4, dim, 1) 
         self.lrelu = nn.LeakyReLU(negative_slope=0.2, inplace=True)
         self.pe = PatchEmbed(img_size=img_size, patch_size=patch_size, in_chans=0, embed_dim=dim, norm_layer=None)
-        self.pue = PatchUnEmbed(img_size=img_size, patch_size=patch_size, in_chans=0, embed_dim=dim, norm_layer=None)
+        self.pue = PatchUnEmbed()
         
     def forward(self, x, xsize):
         x1 = self.pe(self.lrelu(self.adjust1(self.pue(self.swin1(x,xsize), xsize))))
@@ -334,7 +334,6 @@ class PatchMerging(nn.Module):
     def __init__(self, input_resolution, dim, norm_layer=nn.LayerNorm):
         super().__init__()
         self.input_resolution = input_resolution
-        self.dim = dim
         self.reduction = nn.Linear(4 * dim, 2 * dim, bias=False)
         self.norm = norm_layer(4 * dim)
 
@@ -358,7 +357,7 @@ class PatchMerging(nn.Module):
 
         return x
 
-    def extra_repr(self) -> str:
+    def extra_repr(self):
         return f"input_resolution={self.input_resolution}, dim={self.dim}"
 
     def flops(self):
@@ -371,7 +370,6 @@ class PatchMerging(nn.Module):
     def __init__(self, input_resolution, dim, norm_layer=nn.LayerNorm):
         super().__init__()
         self.input_resolution = input_resolution
-        self.dim = dim
         self.reduction = nn.Linear(4 * dim, 2 * dim, bias=False)
         self.norm = norm_layer(4 * dim)
 
@@ -401,13 +399,12 @@ class PatchEmbed(nn.Module):
         img_size = to_2tuple(img_size)
         patch_size = to_2tuple(patch_size)
         patches_resolution = [img_size[0] // patch_size[0], img_size[1] // patch_size[1]]
-        self.img_size = img_size
         self.patch_size = patch_size
         self.patches_resolution = patches_resolution
-        self.num_patches = patches_resolution[0] * patches_resolution[1]
 
         self.in_chans = in_chans
         self.embed_dim = embed_dim
+        self.num_patches = patches_resolution[0] * patches_resolution[1]
 
         if norm_layer is not None:
             self.norm = norm_layer(embed_dim)
@@ -420,7 +417,6 @@ class PatchEmbed(nn.Module):
             x = self.norm(x)  # 归一化
         return x
 
-
     def flops(self):
         Ho, Wo = self.patches_resolution
         flops = Ho * Wo * self.embed_dim * self.in_chans * (self.patch_size[0] * self.patch_size[1])
@@ -429,24 +425,13 @@ class PatchEmbed(nn.Module):
         return flops
     
 class PatchUnEmbed(nn.Module):
-    def __init__(self, img_size=224, patch_size=4, in_chans=3, embed_dim=96, norm_layer=None):
+    def __init__(self):
         super().__init__()
-        img_size = to_2tuple(img_size)  # 图像的大小，默认为 224*224
-        patch_size = to_2tuple(patch_size)  # Patch token 的大小，默认为 4*4
-        patches_resolution = [img_size[0] // patch_size[0], img_size[1] // patch_size[1]]  # patch 的分辨率
-        self.img_size = img_size
-        self.patch_size = patch_size
-        self.patches_resolution = patches_resolution
-        self.num_patches = patches_resolution[0] * patches_resolution[1]  # patch 的个数，num_patches
-
-        self.in_chans = in_chans  # 输入图像的通道数
-        self.embed_dim = embed_dim  # 线性 projection 输出的通道数
 
     def forward(self, x, x_size):
         B, HW, C = x.shape  # 输入 x 的结构
         x = x.transpose(1, 2).view(B, -1, x_size[0], x_size[1])  # 输出结构为 [B, Ph*Pw, C]
         return x
-
 
 class Upsample(nn.Sequential):
     def __init__(self, scale, num_feat):
@@ -462,7 +447,6 @@ class Upsample(nn.Sequential):
             raise ValueError(f'scale {scale} is not supported. ' 'Supported scales: 2^n and 3.')
         super(Upsample, self).__init__(*m)
 
-
 @ARCH_REGISTRY.register()
 class DRCT(nn.Module):
     def __init__(self,
@@ -473,7 +457,6 @@ class DRCT(nn.Module):
                  depths=(6, 6, 6, 6),
                  num_heads=(6, 6, 6, 6),
                  window_size=7,
-                 overlap_ratio=0.5,
                  mlp_ratio=4.,
                  qkv_bias=True,
                  qk_scale=None,
@@ -490,10 +473,6 @@ class DRCT(nn.Module):
                  gc=32,
                  **kwargs):
         super(DRCT, self).__init__()
-        self.window_size = window_size
-        self.shift_size = window_size // 2
-        self.overlap_ratio = overlap_ratio
-
         num_in_ch = in_chans
         num_out_ch = in_chans
         num_feat = 64
@@ -503,7 +482,6 @@ class DRCT(nn.Module):
             self.mean = torch.Tensor(rgb_mean).view(1, 3, 1, 1)
         else:
             self.mean = torch.zeros(1, 1, 1, 1)
-        self.upscale = upscale
         self.upsampler = upsampler
 
         # ------------------------- 1, shallow feature extraction ------------------------- #
@@ -511,20 +489,17 @@ class DRCT(nn.Module):
 
         # ------------------------- 2, deep feature extraction ------------------------- #
         self.num_layers = len(depths)
-        self.embed_dim = embed_dim
         self.ape = ape
         self.patch_norm = patch_norm
         self.num_features = embed_dim
-        self.mlp_ratio = mlp_ratio
 
         # split image into non-overlapping patches
         self.patch_embed = PatchEmbed(img_size=img_size, patch_size=patch_size, in_chans=embed_dim, embed_dim=embed_dim, norm_layer=norm_layer if self.patch_norm else None)
         num_patches = self.patch_embed.num_patches
         patches_resolution = self.patch_embed.patches_resolution
-        self.patches_resolution = patches_resolution
 
         # merge non-overlapping patches into image
-        self.patch_unembed = PatchUnEmbed(img_size=img_size, patch_size=patch_size, in_chans=embed_dim, embed_dim=embed_dim, norm_layer=norm_layer if self.patch_norm else None)
+        self.patch_unembed = PatchUnEmbed()
 
         # absolute position embedding
         if self.ape:
