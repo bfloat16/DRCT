@@ -9,32 +9,19 @@ from basicsr.utils.img_process_util import filter2D
 from basicsr.utils.registry import MODEL_REGISTRY
 from collections import OrderedDict
 from torch.nn import functional as F
-
+from .sobel_loss import SobelLoss
 
 @MODEL_REGISTRY.register()
 class RealDRCTGANModel(SRGANModel):
-    """GAN-based Real_DRCT Model.
-
-    It mainly performs:
-    1. randomly synthesize LQ images in GPU tensors
-    2. optimize the networks with GAN training.
-    """
-
     def __init__(self, opt):
         super(RealDRCTGANModel, self).__init__(opt)
         self.jpeger = DiffJPEG(differentiable=False).cuda()  # simulate JPEG compression artifacts
         self.usm_sharpener = USMSharp().cuda()  # do usm sharpening
         self.queue_size = opt.get('queue_size', 180)
+        self.sobel_loss = SobelLoss().cuda()
 
     @torch.no_grad()
     def _dequeue_and_enqueue(self):
-        """It is the training pair pool for increasing the diversity in a batch.
-
-        Batch processing limits the diversity of synthetic degradations in a batch. For example, samples in a
-        batch could not have different resize scaling factors. Therefore, we employ this training pair pool
-        to increase the degradation diversity in a batch.
-        """
-        # initialize
         b, c, h, w = self.lq.size()
         if not hasattr(self, 'queue_lr'):
             assert self.queue_size % b == 0, f'queue size {self.queue_size} should be divisible by batch size {b}'
@@ -65,8 +52,6 @@ class RealDRCTGANModel(SRGANModel):
 
     @torch.no_grad()
     def feed_data(self, data):
-        """Accept data from dataloader, and then add two-order degradations to obtain LQ images.
-        """
         if self.is_train and self.opt.get('high_order_degradation', True):
             # training data synthesis
             self.gt = data['gt'].to(self.device)
@@ -94,15 +79,9 @@ class RealDRCTGANModel(SRGANModel):
             # add noise
             gray_noise_prob = self.opt['gray_noise_prob']
             if np.random.uniform() < self.opt['gaussian_noise_prob']:
-                out = random_add_gaussian_noise_pt(
-                    out, sigma_range=self.opt['noise_range'], clip=True, rounds=False, gray_prob=gray_noise_prob)
+                out = random_add_gaussian_noise_pt(out, sigma_range=self.opt['noise_range'], clip=True, rounds=False, gray_prob=gray_noise_prob)
             else:
-                out = random_add_poisson_noise_pt(
-                    out,
-                    scale_range=self.opt['poisson_scale_range'],
-                    gray_prob=gray_noise_prob,
-                    clip=True,
-                    rounds=False)
+                out = random_add_poisson_noise_pt(out, scale_range=self.opt['poisson_scale_range'], gray_prob=gray_noise_prob, clip=True, rounds=False)
             # JPEG compression
             jpeg_p = out.new_zeros(out.size(0)).uniform_(*self.opt['jpeg_range'])
             out = torch.clamp(out, 0, 1)  # clamp to [0, 1], otherwise JPEGer will result in unpleasant artifacts
@@ -121,20 +100,13 @@ class RealDRCTGANModel(SRGANModel):
             else:
                 scale = 1
             mode = random.choice(['area', 'bilinear', 'bicubic'])
-            out = F.interpolate(
-                out, size=(int(ori_h / self.opt['scale'] * scale), int(ori_w / self.opt['scale'] * scale)), mode=mode)
+            out = F.interpolate(out, size=(int(ori_h / self.opt['scale'] * scale), int(ori_w / self.opt['scale'] * scale)), mode=mode)
             # add noise
             gray_noise_prob = self.opt['gray_noise_prob2']
             if np.random.uniform() < self.opt['gaussian_noise_prob2']:
-                out = random_add_gaussian_noise_pt(
-                    out, sigma_range=self.opt['noise_range2'], clip=True, rounds=False, gray_prob=gray_noise_prob)
+                out = random_add_gaussian_noise_pt(out, sigma_range=self.opt['noise_range2'], clip=True, rounds=False, gray_prob=gray_noise_prob)
             else:
-                out = random_add_poisson_noise_pt(
-                    out,
-                    scale_range=self.opt['poisson_scale_range2'],
-                    gray_prob=gray_noise_prob,
-                    clip=True,
-                    rounds=False)
+                out = random_add_poisson_noise_pt(out, scale_range=self.opt['poisson_scale_range2'], gray_prob=gray_noise_prob, clip=True, rounds=False)
 
             # JPEG compression + the final sinc filter
             # We also need to resize images to desired sizes. We group [resize back + sinc filter] together
@@ -167,8 +139,7 @@ class RealDRCTGANModel(SRGANModel):
 
             # random crop
             gt_size = self.opt['gt_size']
-            (self.gt, self.gt_usm), self.lq = paired_random_crop([self.gt, self.gt_usm], self.lq, gt_size,
-                                                                 self.opt['scale'])
+            (self.gt, self.gt_usm), self.lq = paired_random_crop([self.gt, self.gt_usm], self.lq, gt_size, self.opt['scale'])
 
             # training pair pool
             self._dequeue_and_enqueue()
@@ -229,6 +200,10 @@ class RealDRCTGANModel(SRGANModel):
             l_g_gan = self.cri_gan(fake_g_pred, True, is_disc=False)
             l_g_total += l_g_gan
             loss_dict['l_g_gan'] = l_g_gan
+            # sobel loss
+            l_sobel = self.sobel_loss(self.output, self.gt)
+            l_g_total += l_sobel
+            loss_dict['l_sobel'] = l_sobel
 
             l_g_total.backward()
             self.optimizer_g.step()

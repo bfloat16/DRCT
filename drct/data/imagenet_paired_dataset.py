@@ -6,8 +6,9 @@ from torchvision.transforms.functional import normalize
 
 from basicsr.data.data_util import paths_from_lmdb, scandir
 from basicsr.data.transforms import augment, paired_random_crop
-from basicsr.utils import FileClient, imfrombytes, img2tensor
-from basicsr.utils.matlab_functions import imresize, rgb2ycbcr
+from basicsr.utils import FileClient, imfrompath, img2tensor
+from basicsr.utils.matlab_functions import imresize
+from basicsr.utils.color_util import rgb2ycbcr
 from basicsr.utils.registry import DATASET_REGISTRY
 
 
@@ -30,7 +31,7 @@ class ImageNetPairedDataset(data.Dataset):
             self.paths = paths_from_lmdb(self.gt_folder)
         elif 'meta_info_file' in self.opt:
             with open(self.opt['meta_info_file'], 'r') as fin:
-                self.paths = [osp.join(self.gt_folder, line.split(' ')[0]) for line in fin]
+                self.paths = [osp.join(self.gt_folder, line.strip()) for line in fin]
         else:
             self.paths = sorted(list(scandir(self.gt_folder, full_path=True)))
 
@@ -44,7 +45,7 @@ class ImageNetPairedDataset(data.Dataset):
         # image range: [0, 1], float32.
         gt_path = self.paths[index]
         img_bytes = self.file_client.get(gt_path, 'gt')
-        img_gt = imfrombytes(img_bytes, float32=True)
+        img_gt = imfrompath(img_bytes, float32=True)
 
         # modcrop
         size_h, size_w, _ = img_gt.shape

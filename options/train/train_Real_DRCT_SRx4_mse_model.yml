@@ -1,12 +1,12 @@
 # general settings
-name: train_Real_DRCT_mse_model
+name: train_Real_DRCT_mse_model+sobel_loss
 model_type: RealDRCTMSEModel
 scale: 4
 num_gpu: auto
 manual_seed: 0
 
 # ----------------- options for synthesizing training data in RealESRNetModel ----------------- #
-gt_usm: True  # USM the ground-truth
+gt_usm: False  # USM the ground-truth
 
 # the first degradation process
 resize_prob: [0.2, 0.7, 0.1]  # up, down, keep
@@ -33,10 +33,10 @@ queue_size: 180
 # dataset and data loader settings
 datasets:
   train:
-    name: DF2K+OST
+    name: TrainSet
     type: RealESRGANDataset
-    dataroot_gt: datasets/DFO/DFO_sub # Refer to Real-ESRGAN for OST dataset. Only DF2K is OK.
-    meta_info_file: drct/data/meta_info/meta_info_DFOsub_GT.txt
+    dataroot_gt: datasets/Train
+    meta_info: datasets/metadata.txt
     io_backend:
       type: disk
 
@@ -64,18 +64,18 @@ datasets:
 
     # data loader
     use_shuffle: true
-    num_worker_per_gpu: 5
-    batch_size_per_gpu: 4
+    num_worker_per_gpu: 9
+    batch_size_per_gpu: 9
     dataset_enlarge_ratio: 1
     prefetch_mode: ~
 
-  # Uncomment these for validation
-  # val:
-  #   name: validation
-  #   type: SingleImageDataset
-  #   dataroot_lq: datasets/RealSRSet+5images
-  #   io_backend:
-  #     type: disk
+  val:
+    name: ValSet
+    type: PairedImageDataset
+    dataroot_gt: ./datasets/Val/gt
+    dataroot_lq: ./datasets/Val/lq
+    io_backend:
+      type: disk
 
 # network structures
 network_g:
@@ -84,9 +84,6 @@ network_g:
   in_chans: 3
   img_size: 64
   window_size: 16
-  compress_ratio: 3
-  squeeze_factor: 30
-  conv_scale: 0.01
   overlap_ratio: 0.5
   img_range: 1.
   depths: [6, 6, 6, 6, 6, 6]
@@ -131,21 +128,31 @@ train:
     loss_weight: 1.0
     reduction: mean
 
-# Uncomment these for validation
-# validation settings
-# val:
-#   val_freq: !!float 1e4
-#   save_img: True
+val:
+  val_freq: !!float 1000
+  save_img: True
 
-#   metrics:
-#     psnr: # metric name
-#       type: calculate_psnr
-#       crop_border: 4
-#       test_y_channel: false
+  metrics:
+    psnr_rgb: # metric name
+      type: calculate_psnr
+      crop_border: 4
+      test_y_channel: false
+    psnr_y: # metric name
+      type: calculate_psnr
+      crop_border: 4
+      test_y_channel: true
+    ssim_rgb: # metric name
+      type: calculate_ssim
+      crop_border: 4
+      test_y_channel: false
+    ssim_y: # metric name
+      type: calculate_ssim
+      crop_border: 4
+      test_y_channel: true
 
 # logging settings
 logger:
-  print_freq: 200
+  print_freq: 50
   save_checkpoint_freq: !!float 1e4
   use_tb_logger: true
   wandb:
